@@ -41,6 +41,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Download
@@ -58,6 +59,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -95,6 +97,7 @@ import me.weishu.kernelsu.ui.util.DownloadListener
 import me.weishu.kernelsu.ui.util.download
 import me.weishu.kernelsu.ui.util.getFileName
 import me.weishu.kernelsu.ui.util.hasMagisk
+import me.weishu.kernelsu.ui.util.restoreModule
 import me.weishu.kernelsu.ui.util.toggleModule
 import me.weishu.kernelsu.ui.util.uninstallModule
 import me.weishu.kernelsu.ui.viewmodel.ModuleViewModel
@@ -245,26 +248,35 @@ fun ModulePager(
         }
     }
 
-    suspend fun onModuleUninstall(module: ModuleViewModel.ModuleInfo) {
-        val confirmResult = confirmDialog.awaitConfirm(
-            moduleStr,
-            content = moduleUninstallConfirm.format(module.name),
-            confirm = uninstall,
-            dismiss = cancel
-        )
-        if (confirmResult != ConfirmResult.Confirmed) {
-            return
+    suspend fun onModuleUninstallClicked(module: ModuleViewModel.ModuleInfo) {
+        val isUninstall = !module.remove
+        if (isUninstall) {
+            val confirmResult = confirmDialog.awaitConfirm(
+                moduleStr,
+                content = moduleUninstallConfirm.format(module.name),
+                confirm = uninstall,
+                dismiss = cancel
+            )
+            if (confirmResult != ConfirmResult.Confirmed) {
+                return
+            }
         }
 
         val success = loadingDialog.withLoading {
             withContext(Dispatchers.IO) {
-                uninstallModule(module.id)
+                if (isUninstall) {
+                    uninstallModule(module.dirId)
+                } else {
+                    restoreModule(module.dirId)
+                }
             }
         }
 
         if (success) {
             viewModel.fetchModuleList()
         }
+        if (!isUninstall) return
+
         val message = if (success) {
             successUninstall.format(module.name)
         } else {
@@ -276,7 +288,7 @@ fun ModulePager(
     suspend fun onModuleToggle(module: ModuleViewModel.ModuleInfo) {
         val success = loadingDialog.withLoading {
             withContext(Dispatchers.IO) {
-                toggleModule(module.id, !module.enabled)
+                toggleModule(module.dirId, !module.enabled)
             }
         }
         if (success) {
@@ -495,9 +507,9 @@ fun ModulePager(
                             navigator = navigator,
                             module = module,
                             updateUrl = updatedModule.first,
-                            onUninstall = {
+                            onUninstallClicked = {
                                 scope.launch {
-                                    onModuleUninstall(module)
+                                    onModuleUninstallClicked(module)
                                 }
                             },
                             onCheckChanged = {
@@ -522,7 +534,7 @@ fun ModulePager(
                                 }
                             },
                             onClick = {
-                                onModuleClick(it.id, it.name, it.hasWebUi)
+                                onModuleClick(it.dirId, it.name, it.hasWebUi)
                             }
                         )
                     }
@@ -579,7 +591,7 @@ fun ModulePager(
                         },
                         onModuleUninstall = { module ->
                             scope.launch {
-                                onModuleUninstall(module)
+                                onModuleUninstallClicked(module)
                             }
                         },
                         onModuleToggle = { module ->
@@ -667,20 +679,6 @@ private fun ModuleList(
             overscrollEffect = null,
         ) {
             when {
-                !viewModel.isOverlayAvailable -> {
-                    item {
-                        Box(
-                            modifier = Modifier.fillParentMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                stringResource(R.string.module_overlay_fs_not_available),
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                }
-
                 viewModel.moduleList.isEmpty() -> {
                     item {
                         Box(
@@ -708,7 +706,7 @@ private fun ModuleList(
                             navigator = navigator,
                             module = module,
                             updateUrl = updatedModule.first,
-                            onUninstall = {
+                            onUninstallClicked = {
                                 scope.launch {
                                     onModuleUninstall(module)
                                 }
@@ -729,7 +727,7 @@ private fun ModuleList(
                                 }
                             },
                             onClick = {
-                                onClickModule(it.id, it.name, it.hasWebUi)
+                                onClickModule(it.dirId, it.name, it.hasWebUi)
                             }
                         )
                     }
@@ -750,7 +748,7 @@ fun ModuleItem(
     navigator: DestinationsNavigator,
     module: ModuleViewModel.ModuleInfo,
     updateUrl: String,
-    onUninstall: (ModuleViewModel.ModuleInfo) -> Unit,
+    onUninstallClicked: (ModuleViewModel.ModuleInfo) -> Unit,
     onCheckChanged: (Boolean) -> Unit,
     onUpdate: (ModuleViewModel.ModuleInfo) -> Unit,
     onClick: (ModuleViewModel.ModuleInfo) -> Unit
@@ -839,7 +837,7 @@ fun ModuleItem(
                             minHeight = 35.dp,
                             minWidth = 35.dp,
                             onClick = {
-                                navigator.navigate(ExecuteModuleActionScreenDestination(module.id)) {
+                                navigator.navigate(ExecuteModuleActionScreenDestination(module.dirId)) {
                                     launchSingleTop = true
                                 }
                                 viewModel.markNeedRefresh()
@@ -909,7 +907,7 @@ fun ModuleItem(
                 enabled = !module.remove,
                 minHeight = 35.dp,
                 minWidth = 35.dp,
-                onClick = { onUninstall(module) },
+                onClick = { onUninstallClicked(module) },
                 backgroundColor = colorScheme.secondaryContainer.copy(alpha = 0.8f),
             ) {
                 Row(
@@ -925,8 +923,8 @@ fun ModuleItem(
                 ) {
                     Icon(
                         modifier = Modifier
-                            .size(20.dp),
-                        imageVector = Icons.Outlined.Delete,
+                            .size(20.dp).apply { if (module.remove) rotate(180f) },
+                        imageVector = if (!module.remove) Icons.Outlined.Delete else Icons.Outlined.Refresh,
                         tint = colorScheme.onSurface.copy(alpha = if (isSystemInDarkTheme()) 0.7f else 0.9f),
                         contentDescription = null
                     )
